@@ -3,6 +3,7 @@
 import contextlib
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -222,6 +223,51 @@ def test_serve_refuses_non_loopback_without_token():
     with pytest.raises(SystemExit) as excinfo:
         serve(host="0.0.0.0", port=0)
     assert excinfo.value.code == 1
+
+
+def test_cli_serve_refuses_non_loopback_without_token():
+    """The CLI subcommand surfaces the same refusal."""
+    from Nexus.__main__ import main
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(["serve", "--host", "0.0.0.0", "--port", "0"])
+    assert excinfo.value.code == 1
+
+
+def test_cli_version(capsys):
+    from Nexus.__main__ import main
+
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--version"])
+    assert excinfo.value.code == 0
+    assert "Nexus 0.1.0" in capsys.readouterr().out
+
+
+def test_status_does_not_block_during_generation(isolated_settings):
+    """Threading server: /api/status answers while a chat is mid-generation."""
+
+    class _SlowEngine(_StubEngine):
+        def process_message(self, message):
+            time.sleep(1.5)
+            return super().process_message(message)
+
+    app = NexusWebApp(settings=isolated_settings, engine=_SlowEngine())
+    with running_server(app) as base:
+        chat_thread = threading.Thread(
+            target=request, args=(base, "/api/chat", "POST"),
+            kwargs={"payload": {"message": "slow one"}},
+        )
+        chat_thread.start()
+        time.sleep(0.2)  # ensure generation has started
+
+        started = time.monotonic()
+        status, _, body = request(base, "/api/status")
+        elapsed = time.monotonic() - started
+        chat_thread.join(timeout=10)
+
+    assert status == 200
+    assert elapsed < 1.0, f"status blocked behind generation for {elapsed:.2f}s"
+    assert json.loads(body)["status"] == "ready"
 
 
 def test_audit_and_skill_endpoints(isolated_settings):

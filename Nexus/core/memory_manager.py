@@ -1,5 +1,7 @@
 """Memory Manager coordinates episodic and semantic memory retrieval."""
 
+from pathlib import Path
+
 from Nexus.core.router import Intent, IntentRouter
 from Nexus.memory.episodic import EpisodicMemory
 from Nexus.memory.semantic import SemanticMemory
@@ -8,9 +10,9 @@ from Nexus.memory.semantic import SemanticMemory
 class MemoryManager:
     """Coordinates retrieval from both episodic and semantic memory stores."""
 
-    def __init__(self, episodic_db_path: str, semantic_persist_dir: str):
-        self.episodic = EpisodicMemory(episodic_db_path)
-        self.semantic = SemanticMemory(semantic_persist_dir)
+    def __init__(self, episodic_db_path: str | Path, semantic_persist_dir: str | Path):
+        self.episodic = EpisodicMemory(Path(episodic_db_path))
+        self.semantic = SemanticMemory(Path(semantic_persist_dir))
         self.router = IntentRouter()
 
     def query(self, message: str, top_k: int = 5, recent_limit: int = 10) -> dict:

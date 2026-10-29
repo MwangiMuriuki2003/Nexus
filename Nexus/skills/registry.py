@@ -123,3 +123,14 @@ class SkillRegistry:
         self.conn.execute("DELETE FROM skills WHERE name = ?", (skill_name,))
         self.conn.commit()
         return True
+
+    def close(self):
+        """Close the underlying connection (idempotent)."""
+        self.conn.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False

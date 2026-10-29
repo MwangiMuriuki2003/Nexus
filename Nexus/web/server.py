@@ -25,10 +25,11 @@ from __future__ import annotations
 import hmac
 import ipaddress
 import json
+import queue
 import sqlite3
 import sys
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -54,15 +55,58 @@ MODEL_HELP = (
 )
 
 
+class EngineWorker:
+    """Runs all engine work on one dedicated thread.
+
+    The engine owns SQLite connections and the llama.cpp context, so requests
+    hand callables to this thread and block for the result; the stores are
+    therefore only ever touched from here, no matter how many request threads
+    ThreadingHTTPServer spawns. `/api/status` never enqueues work, so it cannot
+    block behind an in-flight LLM generation.
+    """
+
+    def __init__(self):
+        self._queue: queue.Queue = queue.Queue()
+        self._thread = threading.Thread(
+            target=self._loop, name="nexus-engine-worker", daemon=True
+        )
+        self._thread.start()
+
+    def _loop(self):
+        while True:
+            item = self._queue.get()
+            if item is None:  # shutdown sentinel
+                return
+            fn, args, kwargs, box = item
+            try:
+                box["result"] = fn(*args, **kwargs)
+            except BaseException as exc:  # propagate to the waiting caller
+                box["error"] = exc
+            finally:
+                box["done"].set()
+
+    def run(self, fn, *args, **kwargs):
+        """Execute `fn` on the worker thread and return its result (blocking)."""
+        box: dict = {"done": threading.Event()}
+        self._queue.put((fn, args, kwargs, box))
+        box["done"].wait()
+        if "error" in box:
+            raise box["error"]
+        return box.get("result")
+
+    def shutdown(self):
+        self._queue.put(None)
+
+
 class NexusWebApp:
     """Request handling for the headless server, independent of the HTTP layer.
 
-    The engine is built lazily: starting the server must not wait for a multi-GB
-    GGUF to load, and must still work when no model is installed at all.
+    The engine is built lazily on a dedicated worker thread: starting the
+    server must not wait for a multi-GB GGUF to load, must still work when no
+    model is installed, and must keep the engine's SQLite connections and
+    llama.cpp context on a single thread.
 
-    `engine_factory` exists because the engine must be constructed on the thread
-    that will use it: the SQLite stores it opens reject cross-thread use, so a
-    lazily built engine belongs on the server's request thread.
+    `engine_factory` exists so tests can substitute the engine.
     """
 
     def __init__(self, settings=None, engine=None, engine_factory=None):
@@ -70,6 +114,7 @@ class NexusWebApp:
         self._engine = engine
         self._engine_factory = engine_factory or self._build_engine
         self._lock = threading.Lock()
+        self._worker = EngineWorker()
 
     def _build_engine(self):
         if not self.model_path.exists():
@@ -90,20 +135,43 @@ class NexusWebApp:
         return Path(self.settings.model_dir) / self.settings.gguf_filename
 
     def engine(self):
-        """Return the shared engine, building it on first use."""
+        """Return the shared engine, building it on the worker thread."""
         with self._lock:
             if self._engine is None:
-                self._engine = self._engine_factory()
+                self._engine = self._worker.run(self._engine_factory)
             return self._engine
 
-    def chat(self, message: str) -> dict:
-        """Route one message through the engine and return JSON-safe data."""
-        result = self.engine().process_message(message)
+    def chat(self, message: str, client_ip: str | None = None) -> dict:
+        """Route one message through the engine and return JSON-safe data.
+
+        `client_ip` is the web request's source address; it is recorded in the
+        append-only audit log alongside the actor so entries say where they
+        came from (skipped when a substituted engine has no audit logger).
+        """
+        engine = self.engine()
+        result = self._worker.run(engine.process_message, message)
+
+        audit = getattr(getattr(engine, "privacy_gate", None), "audit", None)
+        if audit is not None:
+            self._worker.run(
+                audit.log,
+                "chat_request",
+                f"intent={result['intent'].name}, "
+                f"response_chars={len(result.get('response') or '')}",
+                "low",
+                actor="web",
+                ip_address=client_ip,
+            )
+
         return {
             "response": result.get("response", ""),
             "intent": result["intent"].name,
             "cloud_approved": bool(result.get("cloud_approved")),
         }
+
+    def close(self):
+        """Stop the engine worker thread; engine stores close via atexit."""
+        self._worker.shutdown()
 
     def status(self) -> dict:
         path = self.model_path
@@ -241,7 +309,7 @@ class NexusRequestHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            self._send_json(200, self.app.chat(message.strip()))
+            self._send_json(200, self.app.chat(message.strip(), client_ip=self.client_address[0]))
         except RuntimeError as exc:
             # Missing model, or the model failed to load: 503 with the real reason.
             self._send_json(503, {"error": str(exc), "status": "unavailable"})
@@ -275,15 +343,17 @@ def make_server(host: str = "127.0.0.1", port: int = 8080, app: NexusWebApp | No
                 token: str | None = None):
     """Build (but do not start) the HTTP server. Port 0 picks a free port.
 
-    Requests are handled one at a time (plain `HTTPServer`, not the threading
-    variant). That suits a single-user local app, and it keeps the engine — and
-    the SQLite connections and llama.cpp context it owns — on one thread.
+    ThreadingHTTPServer: each request is served on its own thread so a long
+    generation never stalls `/api/status` or the UI shell. The engine itself
+    stays single-threaded — `NexusWebApp` marshals all engine work onto its
+    dedicated worker thread, which is where the SQLite connections and the
+    llama.cpp context live.
 
     When `token` is set, every /api/ route demands `Authorization: Bearer`.
     """
     app = app or NexusWebApp()
     handler = type("BoundNexusHandler", (NexusRequestHandler,), {"app": app, "token": token})
-    return HTTPServer((host, port), handler)
+    return ThreadingHTTPServer((host, port), handler)
 
 
 def serve(host: str = "127.0.0.1", port: int = 8080, token: str | None = None):
@@ -321,3 +391,4 @@ def serve(host: str = "127.0.0.1", port: int = 8080, token: str | None = None):
         print("\nShutting down.", flush=True)
     finally:
         httpd.server_close()
+        app.close()

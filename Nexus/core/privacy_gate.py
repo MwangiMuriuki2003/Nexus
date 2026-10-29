@@ -7,6 +7,17 @@ from Nexus.models.nebius_client import NebiusClient
 ApprovalCallback = Callable[[str, int], bool]
 
 
+def estimate_tokens(text: str) -> int:
+    """Approximate token count as `len(text) / 4`.
+
+    Documented approximation rather than a tokenizer dependency: the number
+    only sizes a user-facing approval prompt ("~N tokens will leave this
+    device"), where being within ~2x is fine. It is never used for billing,
+    truncation or context-window math.
+    """
+    return max(1, len(text) // 4)
+
+
 class PrivacyGate:
     def __init__(self, settings, approval_callback: Optional[ApprovalCallback] = None):
         self.settings = settings
@@ -65,7 +76,7 @@ class PrivacyGate:
         2. If approved, log and forward to Nebius
         3. If denied, handle locally with disclaimer
         """
-        token_estimate = len(str(messages))
+        token_estimate = estimate_tokens(str(messages))
         approved = self.request_approval(reason, token_estimate)
         
         if approved:

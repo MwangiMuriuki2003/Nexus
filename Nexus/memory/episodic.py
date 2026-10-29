@@ -8,7 +8,10 @@ from pathlib import Path
 class EpisodicMemory:
     def __init__(self, db_path: str | Path):
         self.db_path = Path(db_path)
-        self.conn = sqlite3.connect(self.db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        # check_same_thread=False: stores may be written by the engine thread
+        # and closed by the atexit hook on the main thread.
+        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._init_schema()
 
     def _init_schema(self):
@@ -51,3 +54,14 @@ class EpisodicMemory:
             (f"%{self._escape_like(query)}%", limit),
         )
         return cursor.fetchall()
+
+    def close(self):
+        """Close the underlying connection (idempotent)."""
+        self.conn.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False

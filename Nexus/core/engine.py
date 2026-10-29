@@ -43,8 +43,8 @@ class NexusEngine:
 
         # Initialize memory manager with paths from settings
         self.memory = MemoryManager(
-            episodic_db_path=str(settings.db_path),
-            semantic_persist_dir=str(settings.chroma_path),
+            episodic_db_path=settings.db_path,
+            semantic_persist_dir=settings.chroma_path,
         )
 
         # Initialize skill scheduler for scheduled automation, sharing the
@@ -52,9 +52,10 @@ class NexusEngine:
         self.skill_scheduler = SkillScheduler(registry=self.registry)
         # Start it: constructed-but-never-started jobs would never fire.
         self.skill_scheduler.start()
-        # Register shutdown hook: the scheduler instance (not the module-level
-        # global) is what must be shut down.
+        # Register shutdown hooks: the scheduler instance (not the module-level
+        # global) is what must be shut down, and all SQLite-backed stores.
         atexit.register(self.skill_scheduler.shutdown)
+        atexit.register(self.close)
 
     def process_message(self, message):
         """Process a user message through the full pipeline.
@@ -314,3 +315,22 @@ class NexusEngine:
             "Try asking me about your memories, "
             "creating a skill, or using /skill commands."
         )
+
+    def close(self):
+        """Close the three SQLite-backed stores this engine owns (atexit-hooked).
+
+        The audit log may be shared with the UI, so failures and double-closes
+        are tolerated: SQLite also reclaims the handle at process exit.
+        """
+        stores = [
+            getattr(getattr(self, "privacy_gate", None), "audit", None),
+            getattr(getattr(self, "memory", None), "episodic", None),
+            getattr(self, "registry", None),
+        ]
+        for store in stores:
+            if store is None:
+                continue
+            try:
+                store.close()
+            except Exception:  # best effort at shutdown
+                pass

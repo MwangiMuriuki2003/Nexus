@@ -27,6 +27,8 @@ class Settings(BaseSettings):
 
     n_ctx: int = 4096
     temperature: float = 0.7
+    # Stop sequences for local generation (NEXUS_STOP_TOKENS, JSON list).
+    stop_tokens: list[str] = ["<|eot_id|>"]
 
     def model_post_init(self, __context) -> None:
         data_dir = Path(self.data_dir).expanduser().resolve()
