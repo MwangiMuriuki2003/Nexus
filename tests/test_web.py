@@ -144,7 +144,7 @@ def test_chat_endpoint_uses_the_real_engine(isolated_settings):
         "intent": "CHAT",
         "cloud_approved": False,
     }
-    assert json.loads(status_body)["episodes"] == 2
+    assert json.loads(status_body)["episodes"] == 4  # user + assistant per turn
 
 
 def test_chat_rejects_a_missing_message(isolated_settings):

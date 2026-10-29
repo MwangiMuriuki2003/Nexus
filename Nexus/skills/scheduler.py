@@ -65,7 +65,9 @@ class SkillScheduler:
         from Nexus.skills.executor import SkillExecutor
 
         try:
-            executor = SkillExecutor()
+            # Same registry the scheduler was built with: jobs must not fall
+            # back to whatever the global settings point at.
+            executor = SkillExecutor(registry=self.registry)
             result = executor.execute(skill_name)
 
             # Update registry with runtime metrics

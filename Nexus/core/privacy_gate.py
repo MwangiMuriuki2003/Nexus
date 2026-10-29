@@ -69,7 +69,7 @@ class PrivacyGate:
         approved = self.request_approval(reason, token_estimate)
         
         if approved:
-            self.log_cloud_request(reason, token_estimate=token_estimate)
+            self.log_cloud_request(reason, token_estimate=token_estimate, approved=True)
             if self.nebius is None:
                 return {
                     "role": "assistant",
@@ -81,18 +81,23 @@ class PrivacyGate:
             return self.nebius.chat(messages)
         else:
             # Default to local processing with disclaimer
-            self.log_cloud_request(reason, token_estimate=token_estimate, risk_level="medium")
+            self.log_cloud_request(reason, token_estimate=token_estimate, approved=False)
             return {
                 "role": "assistant",
                 "content": f"[Local] Request denied by privacy gate. Reason: {reason}. Running local inference instead."
             }
 
-    def log_cloud_request(self, reason: str, token_estimate: int, risk_level: str = "low"):
-        """Append-only audit log for cloud requests."""
+    def log_cloud_request(self, reason: str, token_estimate: int, approved: bool = False):
+        """Append-only audit log for cloud requests.
+
+        Risk follows where the data went: approved means payloads left the
+        device ("high"); denied means a local fallback only ("low").
+        """
+        status = "approved" if approved else "denied"
         self.audit.log(
             action="cloud_request",
-            detail=f"reason={reason}, tokens_estimate={token_estimate}, risk={risk_level}",
-            risk_level=risk_level,
+            detail=f"{status}: reason={reason}, tokens_estimate={token_estimate}",
+            risk_level="high" if approved else "low",
         )
 
     def log_skill_execution(self, skill_name: str, exit_code: int, runtime: float):

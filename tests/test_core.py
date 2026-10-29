@@ -20,6 +20,35 @@ def test_intent_router():
     assert router.route("/skill some_skill") == Intent.SKILL_EXEC
 
 
+def test_intent_router_requires_explicit_creation_verbs():
+    """"every day"" alone is not a skill-creation request."""
+    router = IntentRouter()
+
+    assert router.route("make a skill that tidies downloads") == Intent.SKILL_CREATION
+    assert router.route("build skill number two") == Intent.SKILL_CREATION
+    assert router.route("generate a skill for backups") == Intent.SKILL_CREATION
+    # No explicit verb -> not creation.
+    assert router.route("every day at noon") == Intent.CHAT
+    assert router.route("schedule this for later") == Intent.CHAT
+
+
+def test_intent_router_schedule_needs_a_known_skill():
+    """SCHEDULE_SKILL only fires when an existing skill is named."""
+    plain = IntentRouter()
+    assert plain.route("schedule something") == Intent.CHAT
+
+    router = IntentRouter(known_skills=lambda: ["archive_logs", "backup_db"])
+
+    assert router.route("schedule archive_logs every day") == Intent.SCHEDULE_SKILL
+    assert router.route("run backup_db every week") == Intent.SCHEDULE_SKILL
+    # Schedule words but no registered skill: fall back to chat.
+    assert router.route("every day I drink coffee") == Intent.CHAT
+    assert router.route("schedule the meeting") == Intent.CHAT
+    # A broken provider must not break routing.
+    broken = IntentRouter(known_skills=lambda: (_ for _ in ()).throw(RuntimeError()))
+    assert broken.route("schedule archive_logs every day") == Intent.CHAT
+
+
 def test_privacy_gate_denies_by_default(tmp_path, monkeypatch):
     """The gate must reject cloud requests unless a UI approval arrives."""
     monkeypatch.setattr(settings, "audit_path", tmp_path / "audit.db")

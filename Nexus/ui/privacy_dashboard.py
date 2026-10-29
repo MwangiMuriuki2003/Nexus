@@ -141,20 +141,18 @@ class PrivacyDashboard(QWidget):
 
     def _update_usage_stats(self):
         """Update local vs cloud usage statistics."""
-        # Count from audit logs
+        # Count from audit logs by action column: approved cloud requests are
+        # the ones where data actually left the device; everything else (and
+        # denied bursts) ran locally.
         try:
-            all_logs = self.privacy_gate.audit.get_logs(limit=500)
+            all_logs = self.privacy_gate.audit.get_logs(limit=500) or []
             cloud_count = sum(
-                1 for log in all_logs if log[3] == "low" and "cloud_request" in log[1]
-            ) if all_logs else 0
-            # Actually let me use a different approach - check the privacy gate state
-            # The privacy gate tracks approved status internally
-            self.local_label.setText(
-                f"Local: {len(all_logs) - cloud_count} calls"
+                1 for log in all_logs
+                if log[1] == "cloud_request" and "denied" not in log[2]
             )
-            self.cloud_label.setText(
-                f"Cloud: {cloud_count} calls (approved)"
-            )
+            local_count = sum(1 for log in all_logs if log[1] != "cloud_request")
+            self.local_label.setText(f"Local: {local_count} calls")
+            self.cloud_label.setText(f"Cloud: {cloud_count} calls (approved)")
         except Exception:
             self.local_label.setText("Local: -- calls")
             self.cloud_label.setText("Cloud: -- calls")
@@ -234,8 +232,7 @@ class PrivacyDashboard(QWidget):
     def _count_semantic_entries(self) -> int:
         """Count entries in semantic memory."""
         try:
-            # ChromaDB doesn't have a simple count, estimate
-            return 0  # Would need collection.count()
+            return self.memory_manager.semantic.count()
         except Exception:
             return 0
 
