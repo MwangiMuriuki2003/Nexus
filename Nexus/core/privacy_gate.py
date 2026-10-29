@@ -13,11 +13,8 @@ class PrivacyGate:
         # UI mode injects a modal-backed callback; headless leaves it None (deny).
         self.approval_callback = approval_callback
         # No API key means cloud bursts stay disabled instead of failing on startup.
-        self.nebius = (
-            NebiusClient(settings.nebius_api_key, settings.nebius_base_url)
-            if settings.nebius_api_key
-            else None
-        )
+        api_key = settings.nebius_api_key.get_secret_value()
+        self.nebius = NebiusClient(api_key, settings.nebius_base_url) if api_key else None
         self.audit = AuditLogger(settings.audit_path)
         self.approved = False
         self.approval_timeout = 30  # seconds

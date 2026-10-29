@@ -136,7 +136,78 @@ def test_banned_builtins():
     assert "eval" in BANNED_BUILTINS
     assert "compile" in BANNED_BUILTINS
     assert "__import__" in BANNED_BUILTINS
-    assert "open" in BANNED_BUILTINS
+    # `open` is deliberately allowed: skills need file I/O.
+    assert "open" not in BANNED_BUILTINS
+
+
+def test_validate_code_rejects_evil_payloads():
+    """The deny-list must reject every known-evil payload."""
+    evil_payloads = {
+        "network socket": "import socket\ns = socket.socket()\n",
+        "network urllib": "import urllib.request\nurllib.request.urlopen('http://evil')\n",
+        "network http": "import http.client\n",
+        "network requests": "import requests\nrequests.get('http://evil')\n",
+        "process subprocess": "import subprocess\nsubprocess.call(['id'])\n",
+        "process multiprocessing": "import multiprocessing\n",
+        "native ctypes": "import ctypes\nctypes.CDLL('libc.so.6')\n",
+        "deserialize pickle": "import pickle\npickle.loads(b'...')\n",
+        "os.system": "import os\nos.system('rm -rf /')\n",
+        "os.popen": "import os\nos.popen('cat /etc/passwd')\n",
+        "os.remove alias": "import os as o\no.remove('/tmp/x')\n",
+        "os exec pattern": "import os\nos.execv('/bin/sh', ['sh'])\n",
+        "os spawn pattern": "import os\nos.spawnlp(os.P_NOWAIT, 'ls', 'ls')\n",
+        "from os import system": "from os import system\nsystem('id')\n",
+        "builtin eval": "eval('1+1')\n",
+        "builtin __import__": "__import__('os').system('id')\n",
+        "dynamic exec": "exec('print(1)')\n",
+    }
+    for label, payload in evil_payloads.items():
+        valid, error = validate_code(payload)
+        assert valid is False, f"{label} must be rejected, got: {error}"
+
+
+def test_validate_code_allows_file_io():
+    """Skills must still be able to import os/json and use open()."""
+    valid, error = validate_code(
+        "import os\nimport json\n"
+        "with open('out.txt', 'w') as f:\n    f.write(json.dumps({'ok': True}))\n"
+        "print(os.path.join('a', 'b'))\n"
+    )
+    assert valid is True, f"legit file-I/O skill rejected: {error}"
+
+
+def test_settings_derive_all_paths_from_data_dir(tmp_path, monkeypatch):
+    """NEXUS_DATA_DIR must move every derived subpath with it."""
+    from Nexus.config import Settings
+
+    data_dir = tmp_path / "nexus-data"
+    monkeypatch.setenv("NEXUS_DATA_DIR", str(data_dir))
+
+    cfg = Settings()
+    resolved = data_dir.resolve()
+
+    assert cfg.data_dir == resolved
+    assert cfg.model_dir == resolved / "models"
+    assert cfg.skills_dir == resolved / "skills"
+    assert cfg.sandbox_dir == resolved / "sandbox"
+    assert cfg.db_path == resolved / "episodic.db"
+    assert cfg.audit_path == resolved / "audit.db"
+    assert cfg.chroma_path == resolved / "chroma"
+
+
+def test_settings_api_key_is_secret(monkeypatch):
+    """The Nebius key must be wrapped so it never leaks through repr/str."""
+    from pydantic import SecretStr
+
+    from Nexus.config import Settings
+
+    monkeypatch.setenv("NEXUS_NEBIUS_API_KEY", "super-secret-key")
+    cfg = Settings()
+
+    assert isinstance(cfg.nebius_api_key, SecretStr)
+    assert "super-secret-key" not in repr(cfg)
+    assert "super-secret-key" not in str(cfg)
+    assert cfg.nebius_api_key.get_secret_value() == "super-secret-key"
 
 
 def test_memory_manager_exposes_both_stores():
