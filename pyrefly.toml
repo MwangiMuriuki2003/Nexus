@@ -1,0 +1,95 @@
+# pyrefly configuration for Nexus project
+# Run with: pyrefly check . or pyrefly fix .
+
+[tool.pyrefly]
+# Error codes to enable/disable
+# See: https://pyrefly.readthedocs.io/en/stable/rules.html
+select = [
+    "all",       # Enable all rules
+    # "RUF",     # Rule force usage (enable only if needed)
+    # "URN",     # Rule unused import
+]
+
+# Ignore specific files or directories
+ignore = [
+    ".git/",
+    "__pycache__/",
+    "*.pyc",
+    ".venv/",
+]
+
+# Target Python version
+target-version = ["3.11"]
+
+# Baseline for complexity checks
+baseline = ".pyrefly-baseline.json"
+
+# Profiles can be used to group rules
+# profile = "standard"
+
+[tool.pyrefly.length-limits]
+# Maximum line length
+max-line-length = 88
+
+# Maximum complexity
+max-complexity = 10
+
+# Maximum module length (in lines)
+max-module-length = 1000
+
+# Maximum function length (in lines)
+max-function-length = 50
+
+# Maximum class length (in lines)
+max-class-length = 500
+
+[tool.pyrefly.imports]
+# Import sorting style
+# "isort" or "pyproject"
+sort-imports = "isort"
+
+# Minimum number of imports on a line to trigger sorting
+min-imports-on-line = 2
+
+[tool.pyrefly.naming]
+# Naming convention checks
+convention = "snakecase"
+
+# Minimum name length
+min-name-length = 1
+
+# Maximum name length
+max-name-length = 40
+
+[tool.pyrefly.format]
+# Format code with black
+format-with-black = true
+
+# Black line length
+black-line-length = 88
+
+[tool.pyrefly.comments]
+# Comment quality checks
+min-comment-length = 20
+
+# Require docstrings on modules
+require-docstrings = true
+
+[tool.pyrefly.flake8]
+# Enable flake8 plugin
+enable-flake8 = true
+
+# flake8 select codes
+flake8-select = ["E", "F", "W", "T"]
+
+[tool.pyrefly.rst]
+# RST validation
+validate-rst = true
+
+[tool.pyrefly.myru]
+# mypy configuration
+mypy-strict = false
+
+mypy-disallow-untyped-defs = false
+
+mypy-disallow-untyped-calls = false
