@@ -1,6 +1,7 @@
 from typing import Callable, Optional
 
 from Nexus.audit.logger import AuditLogger
+from Nexus.keys import resolve_cloud_config
 from Nexus.models.nebius_client import NebiusClient
 
 # Callback receives (reason, token_estimate) and returns True to approve.
@@ -23,12 +24,25 @@ class PrivacyGate:
         self.settings = settings
         # UI mode injects a modal-backed callback; headless leaves it None (deny).
         self.approval_callback = approval_callback
-        # No API key means cloud bursts stay disabled instead of failing on startup.
-        api_key = settings.nebius_api_key.get_secret_value()
-        self.nebius = NebiusClient(api_key, settings.nebius_base_url) if api_key else None
         self.audit = AuditLogger(settings.audit_path)
         self.approved = False
         self.approval_timeout = 30  # seconds
+        # No API key (saved in Settings or set via env) means cloud bursts stay
+        # disabled instead of failing on startup.
+        self.refresh_config()
+
+    def refresh_config(self) -> None:
+        """Re-read the bring-your-own key and endpoint prefs from disk.
+
+        Called at construction and again whenever Settings change, so a key or
+        base URL saved while the app is running is used by the very next cloud
+        request — no restart, no engine rebuild.
+        """
+        config = resolve_cloud_config(self.settings)
+        self.cloud_config = config
+        self.nebius = (
+            NebiusClient(config.api_key, config.base_url) if config.api_key else None
+        )
 
     def request_approval(self, reason: str, token_estimate: int) -> bool:
         """Ask whether this cloud request may leave the device.
@@ -86,10 +100,11 @@ class PrivacyGate:
                     "role": "assistant",
                     "content": (
                         "[Local] No Nebius API key configured. "
-                        "Set NEXUS_NEBIUS_API_KEY to enable cloud bursts."
+                        "Add your own key in Settings (or set NEXUS_NEBIUS_API_KEY) "
+                        "to enable cloud bursts."
                     ),
                 }
-            return self.nebius.chat(messages)
+            return self.nebius.chat(messages, model=self.cloud_config.model)
         else:
             # Default to local processing with disclaimer
             self.log_cloud_request(reason, token_estimate=token_estimate, approved=False)

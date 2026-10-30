@@ -1,15 +1,88 @@
 """Minimal PyQt6 main window for Nexus MVP."""
+import numpy as np
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QTextEdit, QLineEdit, QPushButton, QLabel,
     QDialog, QDialogButtonBox, QFormLayout, QComboBox,
 )
-from PyQt6.QtGui import QAction
-from PyQt6.QtCore import QTimer
+from PyQt6.QtGui import QAction, QImage, QPalette, QPainter, QPixmap
+from PyQt6.QtCore import Qt, QTimer, QRect
 
-from Nexus.config import settings
+from Nexus.config import asset_path, settings
 from Nexus.core.privacy_gate import PrivacyGate
+from Nexus.keys import resolve_cloud_config
 from Nexus.ui.privacy_dashboard import PrivacyDashboard
+
+# Background logo: how much of the window it covers and how faint it is.
+WATERMARK_IMAGE = "nexus-logo-2-hex.png"
+WATERMARK_FILL = 0.5
+WATERMARK_OPACITY = 0.10
+
+
+def watermark_pixmap() -> QPixmap:
+    """The logo with its white paper keyed out to soft alpha.
+
+    The shipped asset is an opaque JPEG (it only carries a `.png` name), so
+    drawn as-is it would lay a bright square over the chat. Alpha is derived
+    from luminance: white paper vanishes, the blue artwork stays — which is
+    what makes a faint backdrop possible on both light and dark palettes.
+    """
+    image = QImage(str(asset_path(WATERMARK_IMAGE)))
+    if image.isNull():
+        return QPixmap()  # asset missing: the window renders without a backdrop
+
+    image = image.convertToFormat(QImage.Format.Format_RGBA8888)
+    bits = image.bits()
+    bits.setsize(image.sizeInBytes())
+    pixels = np.frombuffer(bits, dtype=np.uint8).reshape(
+        image.height(), image.width(), 4
+    ).copy()
+    # uint32: 299*r + 587*g + 114*b reaches 255000, which overflows uint16.
+    red, green, blue = (pixels[..., i].astype(np.uint32) for i in range(3))
+    luminance = (299 * red + 587 * green + 114 * blue) // 1000
+    pixels[..., 3] = (255 - luminance).astype(np.uint8)
+
+    keyed = QImage(
+        pixels.data, image.width(), image.height(), image.width() * 4,
+        QImage.Format.Format_RGBA8888,
+    ).copy()  # copy: detaches from the numpy buffer's lifetime
+    return QPixmap.fromImage(keyed)
+
+
+class WatermarkedWidget(QWidget):
+    """Central widget that paints the logo *behind* its children.
+
+    Children paint after their parent, so the logo can never cover the chat,
+    input or status line — and the chat view is transparent so the backdrop
+    shows through instead of being hidden by an opaque text area.
+    """
+
+    def __init__(self, logo: QPixmap, parent=None):
+        super().__init__(parent)
+        self.logo = logo
+
+    def paintEvent(self, event):
+        with QPainter(self) as painter:
+            painter.fillRect(
+                event.rect(), self.palette().color(QPalette.ColorRole.Window)
+            )
+            if self.logo.isNull():
+                return
+            box = self.logo.size()
+            box.scale(
+                int(self.width() * WATERMARK_FILL),
+                int(self.height() * WATERMARK_FILL),
+                Qt.AspectRatioMode.KeepAspectRatio,
+            )
+            target = QRect(
+                (self.width() - box.width()) // 2,
+                (self.height() - box.height()) // 2,
+                box.width(),
+                box.height(),
+            )
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            painter.setOpacity(WATERMARK_OPACITY)
+            painter.drawPixmap(target, self.logo)
 
 
 class MainWindow(QMainWindow):
@@ -26,12 +99,15 @@ class MainWindow(QMainWindow):
         # Privacy dashboard (lazy init)
         self.privacy_dashboard = None
 
-        central = QWidget()
+        central = WatermarkedWidget(watermark_pixmap())
         self.setCentralWidget(central)
         layout = QVBoxLayout(central)
 
         self.chat_display = QTextEdit()
         self.chat_display.setReadOnly(True)
+        # Transparent so the logo backdrop behind it stays visible; the widget
+        # itself paints the palette's background colour, so contrast is intact.
+        self.chat_display.setStyleSheet("QTextEdit { background: transparent; }")
         layout.addWidget(self.chat_display)
 
         input_row = QHBoxLayout()
@@ -48,8 +124,14 @@ class MainWindow(QMainWindow):
         self.status_label = QLabel("Status: Starting...")
         layout.addWidget(self.status_label)
 
-        # Menu bar with Privacy Dashboard
+        # Menu bar: settings + privacy dashboard
         menubar = self.menuBar()
+        edit_menu = menubar.addMenu("Edit")
+        settings_action = QAction("Settings…", self)
+        settings_action.setShortcut("Ctrl+,")
+        settings_action.triggered.connect(self._show_settings)
+        edit_menu.addAction(settings_action)
+
         view_menu = menubar.addMenu("View")
         privacy_action = QAction("Privacy Dashboard", self)
         privacy_action.setShortcut("Ctrl+Shift+P")
@@ -61,7 +143,30 @@ class MainWindow(QMainWindow):
                 f"Status: No local model at {self.model_path} — run `python -m Nexus setup`"
             )
         else:
-            self.status_label.setText("Status: Ready (model loads on first message)")
+            self.status_label.setText(
+                f"Status: Ready (model loads on first message) — {self._cloud_state()}"
+            )
+
+    @staticmethod
+    def _cloud_state() -> str:
+        """Short suffix describing whether a bring-your-own key is configured."""
+        return (
+            "cloud key configured"
+            if resolve_cloud_config(settings).configured
+            else "local-only (no cloud key)"
+        )
+
+    def _show_settings(self):
+        """Open the Settings dialog (bring your own key + endpoint prefs)."""
+        from Nexus.ui.settings_dialog import SettingsDialog
+
+        dialog = SettingsDialog(settings, privacy_gate=self.privacy_gate, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        current = self.status_label.text()
+        if current.startswith("Status: No local model"):
+            return  # the missing-model advice is the important part here
+        self.status_label.setText(f"{current.split(' — ')[0]} — {self._cloud_state()}")
 
     @property
     def model_path(self):
@@ -96,7 +201,8 @@ class MainWindow(QMainWindow):
         form = QFormLayout(dialog)
         form.addRow("Reason:", QLabel(reason))
         form.addRow("Estimated tokens:", QLabel(f"~{token_estimate}"))
-        form.addRow("Model:", QLabel(settings.nebius_model))
+        # The effective model: a custom one saved in Settings, not just the default.
+        form.addRow("Model:", QLabel(self.privacy_gate.cloud_config.model))
 
         scope = QComboBox()
         scope.addItems(["Once", "Session", "Always"])

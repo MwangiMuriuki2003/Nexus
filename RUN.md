@@ -120,8 +120,10 @@ Creates `~/.nexus/{models,skills,sandbox}`, reports the data directory, and tell
 the GGUF is present (with the exact download command if it is not).
 
 Settings are overridable with `NEXUS_*` env vars (the pydantic prefix), e.g.
-`NEXUS_DATA_DIR=/tmp/nexus-data`. Cloud bursts need `NEXUS_NEBIUS_API_KEY`; without it the
-privacy gate stays local-only instead of failing.
+`NEXUS_DATA_DIR=/tmp/nexus-data`. Cloud bursts need an API key — either `NEXUS_NEBIUS_API_KEY`
+or one you paste yourself in **Edit → Settings** (stored in the OS keyring, or in
+`~/.nexus/cloud_api_key` with `0600` when no keyring exists); with neither, the privacy gate
+stays local-only instead of failing.
 
 ---
 
@@ -139,6 +141,10 @@ Needs an X/Wayland session. Over SSH use `ssh -X`, or a virtual screen:
 Xvfb :99 -screen 0 1280x800x24 &
 DISPLAY=:99 python -m Nexus
 ```
+
+The **Edit → Settings** menu (Ctrl+,) is where you bring your own API key: provider, base URL,
+model and the key itself. Saving applies immediately — the running engine picks the new key up
+without a restart — and **Remove stored key** puts the app back into local-only mode.
 
 The **View → Privacy Dashboard** menu (Ctrl+Shift+P) opens the audit log, local-vs-cloud
 counters and memory statistics.
@@ -158,10 +164,13 @@ memory, skills and the privacy gate behave identically; only the front end diffe
 | Endpoint | Purpose |
 |---|---|
 | `GET /` | single-page chat UI (no build step, no external assets) |
+| `GET /favicon.png` | project icon (also at `/favicon.ico`; type sniffed from magic bytes) |
 | `GET /api/status` | model present/loaded, data dir, local-only flag, skill and episode counts |
 | `POST /api/chat` | `{"message": "..."}` → `{"response", "intent", "cloud_approved"}` |
 | `GET /api/skills` | registered skills |
 | `GET /api/audit?limit=N` | audit log entries (max 500) |
+| `GET /api/settings` | provider, base URL, model, key status (`key_masked` only — never the secret) |
+| `POST /api/settings` | `{provider?, base_url?, model?, api_key?, remove_key?}` → current settings |
 
 ```bash
 curl -s http://localhost:8080/api/status | python -m json.tool
@@ -277,7 +286,7 @@ Verified after the fixes (`ml-lab`, Python 3.11.15):
 | `import Nexus` from `/tmp` | resolves to the repo source tree |
 | `nexus --help` | prints usage (`setup`, `--headless`, `--port`, `--host`) |
 | `./run.sh --help` | activates `ml-lab`, then prints the same usage |
-| `./run.sh --headless --port 8099` | serves `/` (HTML), `/api/status`, `/api/chat`, `/api/skills`, `/api/audit`; chat returns 503 with the download command while the GGUF is absent |
+| `./run.sh --headless --port 8099` | serves `/` (HTML), `/api/status`, `/api/chat`, `/api/skills`, `/api/audit`, `/api/settings`; chat returns 503 with the download command while the GGUF is absent |
 | `python -m Nexus setup` | creates `~/.nexus/…`, reports the missing GGUF and how to fetch it |
 | Headless GUI smoke (`QT_QPA_PLATFORM=offscreen`) | window builds, status reports the missing model, Privacy Dashboard opens and reads the audit DB |
 | `LocalLLM` against a cached GGUF | loads and returns a chat completion through llama.cpp |

@@ -12,6 +12,7 @@ An always-on, local-first personal AI assistant that keeps your data on your dev
 - **Persistent Memory** â€” Episodic timeline (what you did when) + semantic search (what you know).
 - **Skill Forge** â€” Describe a task in plain English; Nexus generates a sandboxed Python skill you can approve and schedule.
 - **Smart Offload** â€” Complex reasoning? A privacy gate asks before sending anything to Nebius Token Factory.
+- **Bring Your Own Key** â€” Paste your own OpenAI-compatible API key in *Settings* (desktop: **Edit â†’ Settings**; web: the **Settings** button) and point Nexus at any compatible endpoint. The key lives in the OS keyring and is only ever sent when you approve a cloud request.
 - **Offline Capable** â€” Core chat, memory, and skill execution work without internet.
 
 ---
@@ -58,7 +59,8 @@ package on first use, then hands every argument to `python -m Nexus`. See
 ```
 
 A single-page chat UI is served at `/`, backed by the same engine as the desktop app
-(`POST /api/chat`, plus `/api/status`, `/api/skills`, `/api/audit`). No Dockerfile is
+(`POST /api/chat`, plus `/api/status`, `/api/skills`, `/api/audit`, `/api/settings`). The
+**Settings** panel on that page is where you add your own API key when running headless. No Dockerfile is
 shipped in this repo; the command above is what such an image would run.
 
 ---
@@ -109,7 +111,7 @@ nexus/
 - **Sandboxed Execution:** Generated skills pass AST validation and run in a restricted subprocess.
 - **Import Whitelist:** Only standard-library modules are allowed inside skills.
 - **No Silent Cloud Calls:** Every Nebius request requires explicit UI approval.
-- **OS Keyring:** Your Nebius API key is stored in the platform-native credential store.
+- **OS Keyring:** Your API key is stored in the platform-native credential store (macOS Keychain, Windows Credential Locker, Linux Secret Service), falling back to a `0600` file under `~/.nexus/` on machines without one. It is never returned by the API and never logged.
 - **Optional Encryption:** Enable at-rest encryption for `~/.nexus/` via the setup wizard.
 
 Read the full security model in [04-Security-Practices.md](./04-Security-Practices.md).

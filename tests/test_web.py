@@ -286,3 +286,32 @@ def test_audit_and_skill_endpoints(isolated_settings):
     assert [s["name"] for s in skills] == ["noop"]
     assert json.loads(audit_body)["entries"] == []
     assert json.loads(status_body)["skills"] == 1
+
+
+def test_index_page_links_the_favicon(isolated_settings):
+    with running_server(NexusWebApp(settings=isolated_settings)) as base:
+        _, _, body = request(base, "/")
+
+    assert 'rel="icon"' in body
+    assert 'href="/favicon.png"' in body
+
+
+def test_favicon_is_served_with_its_real_bytes_and_type(isolated_settings):
+    """The asset is a JPEG named .png, so Content-Type comes from magic bytes."""
+    from Nexus.config import asset_path
+    from Nexus.web.server import FAVICON_FILE, sniff_image_type
+
+    expected = asset_path(FAVICON_FILE).read_bytes()
+    assert sniff_image_type(expected[:16]) == "image/jpeg"
+
+    with running_server(NexusWebApp(settings=isolated_settings)) as base:
+        with urllib.request.urlopen(base + "/favicon.png", timeout=10) as resp:
+            status, content_type = resp.status, resp.headers.get("Content-Type", "")
+            data = resp.read()
+        with urllib.request.urlopen(base + "/favicon.ico", timeout=10) as resp:
+            ico_status = resp.status
+
+    assert status == 200
+    assert ico_status == 200
+    assert content_type == "image/jpeg"
+    assert data == expected

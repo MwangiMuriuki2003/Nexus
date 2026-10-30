@@ -44,6 +44,21 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
+def asset_path(name: str) -> Path:
+    """Locate a shipped asset (logo, favicon) by file name.
+
+    Editable installs keep `Nexus/` beside the repo root, which is where the
+    PNGs live; a working-directory lookup covers other source checkouts. The
+    returned path may not exist — callers decide what a missing asset means
+    (the UI skips its watermark, the server answers 404).
+    """
+    candidates = (Path(__file__).resolve().parents[1] / name, Path.cwd() / name)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return candidates[0]
+
+
 def ensure_dirs() -> None:
     for d in [settings.data_dir, settings.model_dir, settings.skills_dir, settings.sandbox_dir]:
         d.mkdir(parents=True, exist_ok=True)

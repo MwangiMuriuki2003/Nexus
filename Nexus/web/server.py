@@ -8,10 +8,13 @@ the privacy gate behave identically.
 Routes
 ------
 GET  /             single-page UI
+GET  /favicon.png  project icon (also served at /favicon.ico)
 GET  /api/status   model and runtime status
 GET  /api/skills   registered skills
 GET  /api/audit    audit log entries (?limit=N, max 500)
+GET  /api/settings bring-your-own-key + endpoint prefs (never the secret itself)
 POST /api/chat     {"message": "..."} -> {"response", "intent", "cloud_approved"}
+POST /api/settings save endpoint prefs and/or an API key -> current settings
 
 Auth
 ----
@@ -33,11 +36,37 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from Nexus.config import ensure_dirs, settings as default_settings
+from Nexus.config import asset_path, ensure_dirs, settings as default_settings
+from Nexus.keys import CloudPrefs, KeyStore, resolve_cloud_config
 from Nexus.web.page import INDEX_HTML
 
 MAX_BODY_BYTES = 1024 * 1024  # 1 MiB
 MAX_AUDIT_LIMIT = 500
+
+
+class BadRequest(ValueError):
+    """Client-side validation failure on a POST body (answered with 400)."""
+
+
+FAVICON_FILE = "nexus-logo-4-N.png"
+
+
+def sniff_image_type(head: bytes) -> str:
+    """Content type from magic bytes — shipped assets lie about their suffix.
+
+    `nexus-logo-4-N.png` is a JPEG with a `.png` name, so trusting the file
+    extension (or the URL) would label the response `image/png` and trip up
+    clients that honour Content-Type.
+    """
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if head.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if head.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image/webp"
+    return "application/octet-stream"
 
 
 def is_loopback_host(host: str) -> bool:
@@ -192,10 +221,74 @@ class NexusWebApp:
                 "loaded": loaded,
             },
             "data_dir": str(self.settings.data_dir),
-            "local_only": not bool(self.settings.nebius_api_key.get_secret_value()),
+            "local_only": not resolve_cloud_config(self.settings).configured,
             "skills": len(self.skills()),
             "episodes": self._episode_count(),
         }
+
+    def get_settings(self) -> dict:
+        """Bring-your-own-key settings for the UI — never the secret itself."""
+        config = resolve_cloud_config(self.settings)
+        return {
+            "provider": config.provider,
+            "base_url": config.base_url,
+            "model": config.model,
+            "key_configured": config.configured,
+            "key_source": config.key_source,
+            "key_masked": KeyStore(self.settings.data_dir).mask(),
+            "local_only": not config.configured,
+        }
+
+    def update_settings(self, payload) -> dict:
+        """Apply endpoint prefs and/or an API key from a POST body.
+
+        Accepted fields: `provider`, `base_url`, `model` (strings), `api_key`
+        (non-empty string -> stored in the keyring), `remove_key` (true ->
+        delete the stored key). The response is the redacted `get_settings()`
+        view, so a key never round-trips back to the client.
+        """
+        if not isinstance(payload, dict):
+            raise BadRequest("expected a JSON object")
+
+        changes = {}
+        for field in ("provider", "base_url", "model"):
+            if field in payload:
+                if not isinstance(payload[field], str):
+                    raise BadRequest(f"field '{field}' must be a string")
+                changes[field] = payload[field]
+        if "api_key" in payload and not isinstance(payload["api_key"], str):
+            raise BadRequest("field 'api_key' must be a string")
+        if "remove_key" in payload and not isinstance(payload["remove_key"], bool):
+            raise BadRequest("field 'remove_key' must be true or false")
+        if not changes and "api_key" not in payload and "remove_key" not in payload:
+            raise BadRequest(
+                "nothing to update: send provider/base_url/model, api_key or remove_key"
+            )
+
+        store = KeyStore(self.settings.data_dir)
+        try:
+            if changes:
+                CloudPrefs.update(self.settings.data_dir, **changes)
+            if payload.get("remove_key") is True:
+                store.delete()
+            elif str(payload.get("api_key") or "").strip():
+                store.set(payload["api_key"])
+        except ValueError as exc:  # CloudPrefs validation (unknown key, bad URL)
+            raise BadRequest(str(exc)) from exc
+
+        self._refresh_gate_config()
+        return self.get_settings()
+
+    def _refresh_gate_config(self) -> None:
+        """Push a saved key/endpoint change into a live engine's privacy gate."""
+        with self._lock:
+            engine = self._engine
+        if engine is None:
+            return
+        gate = getattr(engine, "privacy_gate", None)
+        refresh = getattr(gate, "refresh_config", None)
+        if callable(refresh):
+            self._worker.run(refresh)
 
     def skills(self) -> list[dict]:
         from Nexus.skills.registry import SkillRegistry
@@ -276,6 +369,10 @@ class NexusRequestHandler(BaseHTTPRequestHandler):
             elif url.path == "/api/audit":
                 limit = self._int_param(url.query, "limit", default=50)
                 self._send_json(200, {"entries": self.app.audit(limit)})
+            elif url.path == "/api/settings":
+                self._send_json(200, self.app.get_settings())
+            elif url.path in ("/favicon.png", "/favicon.ico"):
+                self._send_favicon()
             else:
                 self._send_json(404, {"error": f"no route for {url.path}"})
         except Exception as exc:  # never drop the connection on an unexpected error
@@ -285,7 +382,7 @@ class NexusRequestHandler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         if not self._check_api_auth(url.path):
             return
-        if url.path != "/api/chat":
+        if url.path not in ("/api/chat", "/api/settings"):
             self._send_json(404, {"error": f"no route for {url.path}"})
             return
 
@@ -303,18 +400,32 @@ class NexusRequestHandler(BaseHTTPRequestHandler):
             self._send_json(400, {"error": f"invalid JSON: {exc}"})
             return
 
-        message = payload.get("message") if isinstance(payload, dict) else None
-        if not isinstance(message, str) or not message.strip():
-            self._send_json(400, {"error": "field 'message' is required"})
-            return
-
         try:
+            if url.path == "/api/settings":
+                self._send_json(200, self.app.update_settings(payload))
+                return
+
+            message = payload.get("message") if isinstance(payload, dict) else None
+            if not isinstance(message, str) or not message.strip():
+                self._send_json(400, {"error": "field 'message' is required"})
+                return
             self._send_json(200, self.app.chat(message.strip(), client_ip=self.client_address[0]))
+        except BadRequest as exc:
+            self._send_json(400, {"error": str(exc)})
         except RuntimeError as exc:
             # Missing model, or the model failed to load: 503 with the real reason.
             self._send_json(503, {"error": str(exc), "status": "unavailable"})
         except Exception as exc:
             self._send_json(500, {"error": str(exc)})
+
+    def _send_favicon(self):
+        """Serve the project icon; 404 when the asset is not shipped."""
+        try:
+            data = asset_path(FAVICON_FILE).read_bytes()
+        except OSError:
+            self._send_json(404, {"error": f"{FAVICON_FILE} not found"})
+            return
+        self._send(200, data, sniff_image_type(data[:16]))
 
     # -- helpers ---------------------------------------------------------------
 

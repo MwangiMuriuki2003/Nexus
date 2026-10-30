@@ -10,6 +10,7 @@ INDEX_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/jpeg" href="/favicon.png">
 <title>Nexus — Private Desktop Brain</title>
 <style>
   :root { color-scheme: dark; }
@@ -60,12 +61,39 @@ INDEX_HTML = """<!DOCTYPE html>
   }
   button:disabled { opacity: .5; cursor: default; }
   .hint { padding: 0 1rem .6rem; font-size: .75rem; opacity: .45; }
+  .ghost {
+    background: transparent; border: 1px solid #2c3341; color: #aab;
+    padding: .35rem .7rem; font-size: .78rem;
+  }
+  .ghost:hover:not(:disabled) { border-color: #1d4ed8; color: #fff; }
+  .danger { background: #5b2228; color: #ffd7d7; }
+  .overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 10;
+    display: flex; align-items: center; justify-content: center; padding: 1rem;
+  }
+  .overlay[hidden] { display: none; }  /* beats the flex rule above */
+  .panel {
+    background: #141821; border: 1px solid #2c3341; border-radius: 12px;
+    padding: 1.1rem 1.2rem; width: min(460px, 100%);
+    display: flex; flex-direction: column; gap: .7rem;
+  }
+  .panel h2 { margin: 0; font-size: 1rem; }
+  .panel label { display: flex; flex-direction: column; gap: .3rem; font-size: .78rem; color: #aab; }
+  .panel select {
+    padding: .55rem .6rem; border-radius: 8px; border: 1px solid #2c3341;
+    background: #0f1115; color: inherit; font: inherit;
+  }
+  .panel .row { display: flex; gap: .5rem; align-items: center; }
+  .panel .note { margin: 0; font-size: .72rem; opacity: .55; }
+  #setFeedback { margin: 0; font-size: .78rem; min-height: 1em; color: #ff9b9b; }
 </style>
 </head>
 <body>
 <header>
   <h1>Nexus</h1>
   <span id="status">connecting…</span>
+  <span style="flex:1"></span>
+  <button id="settingsBtn" class="ghost" type="button">Settings</button>
 </header>
 
 <main id="log"></main>
@@ -76,6 +104,37 @@ INDEX_HTML = """<!DOCTYPE html>
   <button id="send" type="submit">Send</button>
 </form>
 <div class="hint">Requests stay local unless a cloud burst is explicitly approved.</div>
+
+<div class="overlay" id="settingsOverlay" hidden>
+  <div class="panel" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <h2 id="settingsTitle">Settings</h2>
+    <label>Provider
+      <select id="setProvider">
+        <option value="nebius">Nebius Token Factory (default)</option>
+        <option value="custom">Custom — any OpenAI-compatible endpoint</option>
+      </select>
+    </label>
+    <label>Base URL
+      <input id="setBaseUrl" autocomplete="off" placeholder="https://api.studio.nebius.com/v1/">
+    </label>
+    <label>Model
+      <input id="setModel" autocomplete="off" placeholder="nvidia/Nemotron-3-Ultra-550B">
+    </label>
+    <label>API key (bring your own)
+      <input id="setKey" type="password" autocomplete="new-password" placeholder="paste a key to store it">
+    </label>
+    <p class="note" id="setKeyStatus">…</p>
+    <div class="row">
+      <button id="setRemove" class="ghost danger" type="button">Remove key</button>
+      <span style="flex:1"></span>
+      <button id="setCancel" class="ghost" type="button">Cancel</button>
+      <button id="setSave" type="button">Save</button>
+    </div>
+    <p id="setFeedback"></p>
+    <p class="note">The key is kept in this device's credential store and only leaves it
+       when you explicitly approve a cloud request.</p>
+  </div>
+</div>
 
 <script>
 const log = document.getElementById("log");
@@ -130,7 +189,7 @@ async function refreshStatus() {
       statusEl.className = "warn";
     }
     statusEl.title =
-      s.model.path + (s.local_only ? "\nlocal-only mode" : "\ncloud burst enabled");
+      s.model.path + (s.local_only ? "\\nlocal-only mode" : "\\ncloud burst enabled");
   } catch (err) {
     statusEl.textContent = "server unreachable";
     statusEl.className = "warn";
@@ -167,6 +226,117 @@ form.addEventListener("submit", async (ev) => {
   } finally {
     sendBtn.disabled = false;
     input.focus();
+  }
+});
+
+// --- Settings: bring your own key + endpoint preferences -------------------
+const overlay = document.getElementById("settingsOverlay");
+const setProvider = document.getElementById("setProvider");
+const setBaseUrl = document.getElementById("setBaseUrl");
+const setModel = document.getElementById("setModel");
+const setKey = document.getElementById("setKey");
+const setKeyStatus = document.getElementById("setKeyStatus");
+const setRemove = document.getElementById("setRemove");
+const setSave = document.getElementById("setSave");
+const setFeedback = document.getElementById("setFeedback");
+const NEBIUS = {
+  base_url: "https://api.studio.nebius.com/v1/",
+  model: "nvidia/Nemotron-3-Ultra-550B",
+};
+
+function keyStatusText(s) {
+  return s.key_configured
+    ? "Key stored (" + (s.key_source || "unknown") + "): " + s.key_masked
+    : "No key stored — cloud bursts stay disabled.";
+}
+
+function settingsFeedback(text) {
+  setFeedback.textContent = text || "";
+}
+
+function closeSettings() {
+  overlay.hidden = true;
+}
+
+async function openSettings() {
+  settingsFeedback("");
+  setKey.value = "";
+  overlay.hidden = false;
+  try {
+    const res = await fetch("/api/settings");
+    const s = await res.json();
+    setProvider.value = s.provider === "custom" ? "custom" : "nebius";
+    setBaseUrl.value = s.base_url || "";
+    setModel.value = s.model || "";
+    setKeyStatus.textContent = keyStatusText(s);
+    setKey.placeholder = s.key_configured
+      ? "stored key — paste a new one to replace it"
+      : "paste your API key";
+    setRemove.disabled = !s.key_configured;
+  } catch (err) {
+    settingsFeedback("Could not load settings: " + err);
+  }
+  setKey.focus();
+}
+
+async function postSettings(body) {
+  const res = await fetch("/api/settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    settingsFeedback(data.error || "save failed (" + res.status + ")");
+    return null;
+  }
+  setKey.value = "";
+  setKeyStatus.textContent = keyStatusText(data);
+  setKey.placeholder = data.key_configured
+    ? "stored key — paste a new one to replace it"
+    : "paste your API key";
+  setRemove.disabled = !data.key_configured;
+  closeSettings();
+  refreshStatus();
+  return data;
+}
+
+document.getElementById("settingsBtn").addEventListener("click", openSettings);
+document.getElementById("setCancel").addEventListener("click", closeSettings);
+overlay.addEventListener("click", (ev) => { if (ev.target === overlay) closeSettings(); });
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape" && !overlay.hidden) closeSettings();
+});
+setProvider.addEventListener("change", () => {
+  if (setProvider.value === "nebius") {
+    setBaseUrl.value = NEBIUS.base_url;
+    setModel.value = NEBIUS.model;
+  } else {
+    setBaseUrl.value = "";
+    setModel.value = "";
+  }
+});
+setSave.addEventListener("click", async () => {
+  setSave.disabled = true;
+  try {
+    const body = {
+      provider: setProvider.value,
+      base_url: setBaseUrl.value.trim(),
+      model: setModel.value.trim(),
+    };
+    const key = setKey.value.trim();
+    if (key) body.api_key = key;  // an empty field leaves the stored key alone
+    await postSettings(body);
+  } finally {
+    setSave.disabled = false;
+  }
+});
+setRemove.addEventListener("click", async () => {
+  setRemove.disabled = true;
+  try {
+    await postSettings({ remove_key: true });
+  } finally {
+    setRemove.disabled = false;
   }
 });
 
