@@ -1,135 +1,204 @@
-# Nexus â€” Private Desktop Brain
+# Nexus
 
-**Track:** Personal AI â€” Nebius Ã— NVIDIA Global AI Hackathon
+Private Desktop Brain
 
-An always-on, local-first personal AI assistant that keeps your data on your device. Chat, remember, automate, and reason â€” powered by **NVIDIA Nemotron** models, with optional cloud-burst reasoning via **Nebius Token Factory** only when you explicitly approve it.
+Nexus is a privacy-first local AI assistant designed for desktop and headless environments. It keeps personal data on-device by default, remembers important context, and supports optional cloud reasoning only when the user explicitly approves it. Built around a local model workflow, Nexus helps users chat, search memory, and automate routine work without compromising privacy.
 
----
+## About
 
-## Features
+Nexus was created for people who want an AI assistant that feels personal, useful, and trustworthy. Rather than depending entirely on cloud services, Nexus emphasizes local-first intelligence: conversations, memories, and generated automation remain under the user’s control.
 
-- **Private by Default** â€” All data lives in `~/.nexus/`. No cloud calls without your approval.
-- **Persistent Memory** â€” Episodic timeline (what you did when) + semantic search (what you know).
-- **Skill Forge** â€” Describe a task in plain English; Nexus generates a sandboxed Python skill you can approve and schedule.
-- **Smart Offload** â€” Complex reasoning? A privacy gate asks before sending anything to Nebius Token Factory.
-- **Bring Your Own Key** â€” Paste your own OpenAI-compatible API key in *Settings* (desktop: **Edit â†’ Settings**; web: the **Settings** button) and point Nexus at any compatible endpoint. The key lives in the OS keyring and is only ever sent when you approve a cloud request.
-- **Offline Capable** â€” Core chat, memory, and skill execution work without internet.
+The project combines:
 
----
+- a local language model for private, responsive everyday interaction
+- persistent episodic and semantic memory
+- sandboxed skill generation and execution
+- privacy-aware routing for cloud inference
+- both desktop and web-based interfaces
+
+This makes Nexus suitable for knowledge workers, developers, and privacy-conscious users who want an AI companion that can reason locally while still offering optional cloud bursts when necessary.
+
+## Why Nexus?
+
+- Privacy by default: local data storage and explicit approval before cloud access
+- Persistent memory: remembers events, context, and useful information over time
+- Safe automation: generate and review Python skills in a sandboxed environment
+- Flexible access: works in desktop mode and headless web mode
+- Offline capable: core workflows remain usable without internet connectivity
+
+## Key Features
+
+- Local-first AI chat with NVIDIA Nemotron-based inference
+- Privacy gate that requires approval before sending requests to external services
+- Episodic memory for tracking past user activity and context
+- Semantic memory search for retrieving relevant information and documents
+- Skill Forge to generate and review automation scripts in plain English
+- Sandboxed execution with restrictive import and filesystem controls
+- Desktop UI with PyQt6 and a lightweight web interface for headless deployment
 
 ## Architecture
 
-```
-PyQt6 UI  â†’  Intent Router  â†’  Local LLM (Nemotron Nano 4B)
-                   â”‚                â”‚
-                   â”œâ”€â”€ Memory Manager (SQLite + ChromaDB)
-                   â”œâ”€â”€ Skill Registry (SQLite + Sandbox)
-                   â””â”€â”€ Privacy Gate â†’ Nebius Token Factory (Nemotron Ultra)
+Nexus follows a modular architecture that separates intent handling, memory, model access, and safe execution:
+
+```text
+User Interface
+      │
+      ▼
+Intent Router
+      │
+      ├── Local LLM (NVIDIA Nemotron Nano)
+      │
+      ├── Memory Layer (SQLite + ChromaDB)
+      │
+      ├── Skill Registry + Sandbox
+      │
+      └── Privacy Gate
+              │
+              └── Optional cloud burst via Nebius / compatible API providers
 ```
 
----
+This layered design allows the application to preserve local context, enforce privacy boundaries, and decide when external reasoning is appropriate.
 
 ## Quick Start
 
 ### Requirements
+
 - Python 3.11+
-- 8 GB RAM (16 GB recommended)
-- 6 GB VRAM optional for GPU acceleration; CPU works fine
+- Conda environment recommended (`ml-lab` in the project instructions)
+- Local model file for inference
+- Optional GPU acceleration, though CPU mode is supported
 
-### Install
+### 1. Clone the repository
+
 ```bash
-git clone https://github.com/yourname/nexus.git
-cd nexus
-./run.sh setup   # activates the env, installs if needed, initializes ~/.nexus
+git clone https://github.com/MwangiMuriuki2003/Nexus.git
+cd Nexus
 ```
 
-### First Run
+### 2. Activate the environment
+
 ```bash
-./run.sh   # launches the desktop app
+conda activate ml-lab
+python --version
 ```
 
-`./run.sh` activates the conda env, sets the pip flags this machine needs, installs the
-package on first use, then hands every argument to `python -m Nexus`. See
-[RUN.md](./RUN.md) for the manual steps and the model download.
+### 3. Install dependencies
 
-### Headless (Web UI)
 ```bash
-./run.sh --headless                       # http://localhost:8080
-./run.sh --headless --host 0.0.0.0 --port 8080   # reachable from outside a container
+export PIP_REQUIRE_VIRTUALENV=0
+python -m pip install -e .
 ```
 
-A single-page chat UI is served at `/`, backed by the same engine as the desktop app
-(`POST /api/chat`, plus `/api/status`, `/api/skills`, `/api/audit`, `/api/settings`). The
-**Settings** panel on that page is where you add your own API key when running headless. No Dockerfile is
-shipped in this repo; the command above is what such an image would run.
+### 4. Download the local model
 
----
+The project expects a local GGUF model in the Nexus data directory. The recommended workflow is:
 
-## Usage
+```bash
+mkdir -p ~/.nexus/models
+huggingface-cli download nvidia/Llama-3.1-Nemotron-Nano-4B-v1 \
+  Llama-3.1-Nemotron-Nano-4B-v1-Q4_K_M.gguf --local-dir ~/.nexus/models
+```
 
-| Action | How |
-|---|---|
-| Chat | Type in the main panel. Responses use your local model. |
-| Search memory | *"What did I copy yesterday?"* |
-| Create a skill | *"Every Friday, zip my Downloads folder"* â†’ review code â†’ approve |
-| Cloud burst | Prefix with `!ultra` or approve the privacy gate modal for deep reasoning. |
-| Check privacy | Open the **Privacy Dashboard** to view local vs. cloud usage and audit logs. |
+### 5. Initialize the app
 
----
+```bash
+python -m Nexus setup
+```
 
-## Nebius & NVIDIA Integration
+### 6. Run Nexus
 
-| Technology | Where It Lives | Purpose |
-|---|---|---|
-| **Nebius Token Factory** | `nexus/models/nebius_client.py` | Secure, approved cloud bursts to Nemotron 3 Ultra for heavy reasoning |
-| **NVIDIA Nemotron Nano 4B** | `nexus/models/local_llm.py` | Fast, private, local chat and skill generation |
-| **NVIDIA Nemotron 3 Ultra** | Via Nebius Token Factory | Advanced coding, long-context analysis, complex reasoning |
-| **NVIDIA NemoClaw** | Architecture reference | Agent loop design (memory â†’ tools â†’ LLM) |
-| **NVIDIA OpenShell** | Design influence | Sandboxed skill execution policy |
+Desktop mode:
 
----
+```bash
+python -m Nexus
+```
+
+Headless web mode:
+
+```bash
+python -m Nexus --headless
+```
+
+Or use the convenience launcher:
+
+```bash
+./run.sh
+./run.sh --headless
+```
+
+For detailed environment setup, troubleshooting, and model configuration, see [RUN.md](./RUN.md).
 
 ## Project Structure
 
+```text
+Nexus/
+├── Nexus/                  # Core package
+│   ├── __main__.py         # CLI entry point
+│   ├── config.py          # App configuration and paths
+│   ├── core/              # Engine and routing logic
+│   ├── memory/            # SQLite + semantic memory
+│   ├── models/            # Local LLM and API integrations
+│   ├── skills/            # Skill generation and registry
+│   ├── sandbox/           # Safe execution and validation
+│   ├── ui/                # PyQt6 user interface
+│   └── web/               # Headless web interface
+├── tests/                 # Automated test suite
+├── documents/             # Project documentation
+├── PRD.md                 # Product requirements document
+├── RUN.md                 # Setup and execution guide
+├── pyproject.toml         # Packaging and dependency configuration
+├── run.sh                 # One-command launcher
+├── test_nexus_run.py      # Run verification script
+└── README.MD              # Project overview
 ```
-nexus/
-â”œâ”€â”€ __main__.py          # CLI entry point
-â”œâ”€â”€ config.py            # Paths and settings
-â”œâ”€â”€ ui/                  # PyQt6 interface
-â”œâ”€â”€ core/                # Engine and intent router
-â”œâ”€â”€ memory/              # Episodic (SQLite) + semantic (ChromaDB)
-â”œâ”€â”€ models/              # Local LLM + Nebius client
-â”œâ”€â”€ skills/              # Skill generator and registry
-â”œâ”€â”€ sandbox/             # AST policy + safe runner
-â””â”€â”€ audit/               # Append-only audit logger
+
+## How Nexus Works
+
+Nexus is designed around a simple but powerful workflow:
+
+1. The user interacts with the desktop or web interface.
+2. The intent router classifies the request.
+3. Relevant context is retrieved from local memory.
+4. The local model responds or plans an action.
+5. If the task requires deeper reasoning or external processing, the privacy gate prompts for approval.
+6. Approved actions may trigger cloud inference while keeping the system transparent and auditable.
+
+## Security and Privacy
+
+Security is one of the foundational principles of Nexus.
+
+- Local-first data storage keeps user information on-device by default
+- Cloud access is gated behind explicit user approval
+- Generated automation runs inside a restricted sandbox
+- Import and filesystem access are tightly controlled
+- Privacy dashboard and audit logs help users understand what was processed locally versus remotely
+
+These safeguards are designed to make the platform more suitable for sensitive work and private knowledge management.
+
+## Development and Testing
+
+The project includes a test suite for core behavior, memory management, skill execution, and web interactions.
+
+Run the tests with:
+
+```bash
+python -m pytest tests/ -q
 ```
 
----
+## Documentation
 
-## Security
+The repository includes supporting documentation for setup and product direction:
 
-- **Sandboxed Execution:** Generated skills pass AST validation and run in a restricted subprocess.
-- **Import Whitelist:** Only standard-library modules are allowed inside skills.
-- **No Silent Cloud Calls:** Every Nebius request requires explicit UI approval.
-- **OS Keyring:** Your API key is stored in the platform-native credential store (macOS Keychain, Windows Credential Locker, Linux Secret Service), falling back to a `0600` file under `~/.nexus/` on machines without one. It is never returned by the API and never logged.
-- **Optional Encryption:** Enable at-rest encryption for `~/.nexus/` via the setup wizard.
+- [RUN.md](./RUN.md) — local setup, installation, run instructions, and troubleshooting
+- [PRD.md](./PRD.md) — product goals and functional requirements
+- [documents/](./documents) — additional project planning materials
 
-Read the full security model in [04-Security-Practices.md](./04-Security-Practices.md).
+## Future Direction
 
----
+Nexus is positioned as a practical local AI agent for everyday work: personal assistance, memory-aware reasoning, safe automation, and transparent privacy controls. The project continues to evolve toward a more complete personal AI workflow while keeping the user in control of their data.
 
-## Demo Video
+## Summary
 
-Watch the 3-minute walkthrough: [YouTube link placeholder]
+Nexus bridges the gap between private local intelligence and practical AI assistance. It combines memory, automation, privacy safeguards, and flexible deployment into a single platform built for users who care about control, trust, and usefulness.
 
----
-
-## License
-
-Apache 2.0 â€” see [LICENSE](./LICENSE).
-
----
-
-## Feedback
-
-Our experience using Nebius and NVIDIA tools is documented in [FEEDBACK.md](./FEEDBACK.md).
+For installation guidance and hands-on execution notes, start with [RUN.md](./RUN.md).
